@@ -73,6 +73,8 @@ class MokioMindConfig(PretrainedConfig):
 import torch
 import torch.nn as nn
 #继承nn.Module类
+
+# RMSNorm方法
 class RMSNorm(nn.Module):
     
 #init初始化
@@ -87,3 +89,56 @@ class RMSNorm(nn.Module):
 #forward方法
     def foward(self,x):
         return self._norm(x.float()).type_as(x) * self.weight
+
+#RoPE部分
+#注意RoPE只是一个方法，不是一层网络；所以不需要创建类/继承
+def precompt_freqs_cis(dim:int,end:int=32*1024,rope_base:float=1e6,
+                       rope_scaling:Optional[dict]=None):
+#写出最初的RoPE式子
+    freqs = 1.0 / rope_base ** ( torch.arange(0,dim,2)[:dim//2].float()/dim )
+    
+    if rope_scaling is not None:
+        orig_max , factor ,beta_fast , beta_slow = (
+            rope_scaling.get("original_max_position_embeddings", 2048),
+            rope_scaling.get("factor",4),
+            rope_scaling.get("beta_fast",4),
+            rope_scaling.get("beta_slow",1)
+        )
+    #计算corr_dim
+        corr_dim = next( (i for i in range(dim//2) if 2*math.pi/freqs[i]>orig_max),dim//2)
+    #计算power
+        power = torch.arange(0,dim//2,device=freqs.device).float()/(max(dim//2-1,1))
+    #计算beta
+        beta = beta_slow + (beta_fast-beta_slow)*power
+    #计算scale
+        scale = torch.where(
+            torch.arange(dim//2,device=freqs.device) < corr_dim ,
+            (beta*factor-beta+1) / (beta+factor),
+            1.0/factor
+        )
+    #应用scale
+        freqs = freqs * scale
+#生成位置索引，与频率相乘，得到完整频率矩阵
+    t = torch.arange(end,device=freqs.device).float()
+    freqs = torch.outer(t,freqs) #[end,dim//2]这样的矩阵
+#返回一个cos和sin
+    freqs_cos = torch.cat([torch.cos(freqs),torch.cos(freqs)],dim=-1)
+    freqs_sin = torch.cat([torch.sin(freqs),torch.sin(freqs)],dim=-1)
+    return freqs_cos, freqs_sin
+
+#函数：应用位置编码
+def apply_rope_pos_emb(q,k,cos,sin,unsqueeze_dim=1):
+    # [a,b] -> [-b,a]  旋转
+    def rotate_half(x):
+        # x.shape[-1] 取最后一个维度的中点
+        #
+
+        # return[后半部分,前半部分]
+        return torch.cat([ -x[...,x.shape[-1]//2:] , x[...,:x.shape[-1]//2] ],
+                         dim=-1)
+        # 应用旋转位置编码
+        # x_rot = x * cos + rotate_half(x) * sin
+        # unqueeze_dim 用于在指定维度上扩展cos和sin的维度，以便与q和k进行广播操作
+        q_embed = ( q * cos.unsqueeze(unsqueeze_dim) + rotate_half(q) * sin.unsqueeze(unsqueeze_dim) )
+        k_embed = ( k * cos.unsqueeze(unsqueeze_dim) + rotate_half(k) * sin.unsqueeze(unsqueeze_dim) )
+        return q_embed, k_embed
