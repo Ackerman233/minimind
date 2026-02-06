@@ -142,3 +142,42 @@ def apply_rope_pos_emb(q,k,cos,sin,unsqueeze_dim=1):
         q_embed = ( q * cos.unsqueeze(unsqueeze_dim) + rotate_half(q) * sin.unsqueeze(unsqueeze_dim) )
         k_embed = ( k * cos.unsqueeze(unsqueeze_dim) + rotate_half(k) * sin.unsqueeze(unsqueeze_dim) )
         return q_embed, k_embed
+
+# 多个Q对于重复的kv
+def repeat_kv(x:torch.Tensor,n_rep:int) ->torch.Tensor:
+    bs, slen, num_key_value_heads, head_dim=x.shape #四维张量
+    if n_rep == 1:
+        return x
+    
+    return ( x[:,:,:,None,:]
+            .expand(bs, slen, num_key_value_heads, n_rep, head_dim) #五维
+            .reshape(bs, slen, num_key_value_heads * n_rep, head_dim) ) #再变回四维的，第3个维度*第4个维度
+
+
+class Attention(nn.Module):
+    def __init__(self, args:MokioMindConfig):
+        super().__init__()
+
+        self.num_key_value_heads = args.num_key_value_heads if args.num_key_value_heads is None else args.num_attention_heads
+        assert args.num_attention_heads % self.num_key_value_heads == 0, \
+        "num_attention_heads must be divisible by self.num_key_value_heads"
+
+        self.n_local_heads = args.num_attention_heads
+        self.n_local_kv_heads = args.num_key_value_heads
+        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.head_dim = args.hidden_size // args.num_attention_heads
+
+        self.q_proj = nn.Linear(args.hidden_size, args.num_attention_heads * self.head_dim,
+                                bias=False)
+        self.k_proj = nn.Linear(args.hidden_size, self.num_key_value_heads * self.head_dim,
+                                bias=False)
+        self.v_proj = nn.Linear(args.hidden_size, self.num_key_value_heads * self.head_dim,
+                                bias=False)
+        self.o_proj = nn.Linear(self.num_key_value_heads * self.head_dim, args.hidden_size,
+                                bias=False) #反过来的
+        
+        self.attn_dropout = nn.Dropout(args.dropout)
+        self.resid_dropout = nn.Dropout(args.dropout)   #残差网络
+        self.dropout = args.dropout
+
+        self.flash = hasattr(torch.nn.functional,"scaled_dot_product_attention") and args.flash_attention
