@@ -75,6 +75,7 @@ import torch.nn as nn
 import math
 from typing import Optional, Tuple
 from torch.nn import functional as F
+from transformers.activations import ACT2FN
 #继承nn.Module类
 
 # RMSNorm方法
@@ -248,3 +249,35 @@ class Attention(nn.Module):
         output = output.transpose(1,2).reshape(bsz,seq_len,-1)
         output = self.resid_dropout(self.o_proj(output))
         return output,past_kv
+    
+# FFN层
+class FeedForward(nn.Module):
+    # 初始化
+    # 升维
+    # 降维
+    # 门控
+    # dropout
+    # 激活函数
+    def __init__(self, args:MokioMindConfig):
+        super().__init__()
+        if args.intermediate_size is None:
+            intermediate_size = int(args.hidden_size*8/3)
+            args.intermediate_size=64*((intermediate_size+64-1)//64)
+
+        # 升维
+        self.up_proj = nn.Linear(args.hidden_size,args.intermediate_size,bias=False)
+        # 降维
+        self.down_proj = nn.Linear(args.intermediate_size,args.hidden_size,bias=False)
+        # 门控
+        self.gate_proj = nn.Linear(args.hidden_size,args.intermediate_size,bias=False)
+        # dropout
+        self.dropout = nn.Dropout(args.dropout)
+        # 激活函数
+        self.act_fn = ACT2FN[args.hidden_act]
+    
+    def forward(self,x):
+        return self.dropout(
+            self.down_proj(
+                self.act_fn(self.gate_proj(x)) * self.up_proj(x) 
+                )
+            )
