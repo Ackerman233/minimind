@@ -73,9 +73,12 @@ class MokioMindConfig(PretrainedConfig):
 import torch
 import torch.nn as nn
 import math
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from torch.nn import functional as F
 from transformers.activations import ACT2FN
+from transformers import PreTrainedModel, GenerationMixin
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
 #继承nn.Module类
 
 # RMSNorm方法
@@ -397,3 +400,57 @@ class MokioMindModel(nn.Module):
         hidden_states = self.norm(hidden_states)
 
         return hidden_states,presents
+    
+######
+# CausalLM模型封顶(从Linear到Tokenizer Decoder)
+class MokioMindForCausalLM(PreTrainedModel,GenerationMixin):
+    config_class = MokioMindConfig
+
+    def __init__(self, config:MokioMindConfig):
+        self.config = config
+        super().__init__(config)
+
+        self.model = MokioMindModel(config)
+
+        self.lm_head=nn.Linear(
+            self.config.hidden_size,
+            self.config.vocab_size,
+            bias=False
+        )
+        # 权重共享
+        # 让输出层的权重和嵌入曾的权重共享
+        self.model.embed_tokens.weight = self.lm_head.weight
+
+        self.OUT = CausalLMOutputWithPast()
+
+
+    def forward(
+            self,
+            input_ids:Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor]]] = None,
+            use_cache: bool = False,
+            logits_to_keep:Union[int,torch.Tensor]=0,
+            **args
+            ):
+        hidden_states, past_key_values=self.model(
+            input_ids = input_ids,
+            attention_mask = attention_mask,
+            past_key_values = past_key_values,
+            use_cache = use_cache,
+            **args,
+        )
+        # 如果logits to keep是整数，那就保留最后n个位置
+        # 生成时只需要最后的logits来预测下一个token
+        slice_indices = (
+            slice(-logits_to_keep,None) 
+            if isinstance(logits_to_keep,int)
+            else logits_to_keep
+        )
+        logits =  self.lm_head(hidden_states[:,slice_indices,:])
+
+        self.OUT.__setitem__("last_hidden_states",hidden_states)
+        self.OUT.__setitem__("logits",logits)
+        self.OUT.__setitem__("past_key_values",past_key_values)
+
+        return self.OUT
