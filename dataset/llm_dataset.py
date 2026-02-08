@@ -32,9 +32,9 @@ class PretrainDataset(Dataset):
 
         encoding = self.tokenizer(
             str(sample["text"]),
-            max_length = self.max_length
-            padding = "max_length"
-            truncation = True
+            max_length = self.max_length,
+            padding = "max_length",
+            truncation = True,
             return_tensors = "pt"
         )
 
