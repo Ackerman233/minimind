@@ -103,7 +103,7 @@ class RMSNorm(nn.Module):
 def precompt_freqs_cis(dim:int,end:int=32*1024,rope_base:float=1e6,
                        rope_scaling:Optional[dict]=None):
 #写出最初的RoPE式子
-    freqs = 1.0 / rope_base ** ( torch.arange(0,dim,2)[:dim//2].float()/dim )
+    freqs = 1.0 / ( rope_base ** ( torch.arange(0,dim,2)[:dim//2].float()/dim ) )
     
     if rope_scaling is not None:
         orig_max , factor ,beta_fast , beta_slow = (
@@ -112,20 +112,21 @@ def precompt_freqs_cis(dim:int,end:int=32*1024,rope_base:float=1e6,
             rope_scaling.get("beta_fast",4),
             rope_scaling.get("beta_slow",1)
         )
-    #计算corr_dim
-        corr_dim = next( (i for i in range(dim//2) if 2*math.pi/freqs[i]>orig_max),dim//2)
-    #计算power
-        power = torch.arange(0,dim//2,device=freqs.device).float()/(max(dim//2-1,1))
-    #计算beta
-        beta = beta_slow + (beta_fast-beta_slow)*power
-    #计算scale
-        scale = torch.where(
-            torch.arange(dim//2,device=freqs.device) < corr_dim ,
-            (beta*factor-beta+1) / (beta+factor),
-            1.0/factor
-        )
-    #应用scale
-        freqs = freqs * scale
+        if end / orig_max > 1.0:
+        #计算corr_dim
+            corr_dim = next( (i for i in range(dim//2) if 2*math.pi/freqs[i]>orig_max),dim//2)
+        #计算power
+            power = torch.arange(0,dim//2,device=freqs.device).float()/(max(dim//2-1,1))
+        #计算beta
+            beta = beta_slow + (beta_fast-beta_slow)*power
+        #计算scale
+            scale = torch.where(
+                torch.arange(dim//2,device=freqs.device) < corr_dim ,
+                (beta*factor-beta+1) / (beta+factor),
+                1.0/factor
+            )
+        #应用scale
+            freqs = freqs * scale
 #生成位置索引，与频率相乘，得到完整频率矩阵
     t = torch.arange(end,device=freqs.device).float()
     freqs = torch.outer(t,freqs) #[end,dim//2]这样的矩阵
@@ -167,7 +168,11 @@ class Attention(nn.Module):
     def __init__(self, args:MokioMindConfig):
         super().__init__()
 
-        self.num_key_value_heads = args.num_key_value_heads if args.num_key_value_heads is None else args.num_attention_heads
+        self.num_key_value_heads = (
+            args.num_attention_heads 
+            if args.num_key_value_heads is None 
+            else args.num_key_value_heads
+            )
         assert args.num_attention_heads % self.num_key_value_heads == 0, \
         "num_attention_heads must be divisible by self.num_key_value_heads"
 
@@ -192,7 +197,7 @@ class Attention(nn.Module):
         self.flash = hasattr(torch.nn.functional,"scaled_dot_product_attention") and args.flash_attention
     
 # Forward方法
-    def forward(self,x:torch.Tensor,position_embdding:Tuple[torch.Tensor,torch.Tensor],
+    def forward(self,x:torch.Tensor,position_embddings:Tuple[torch.Tensor,torch.Tensor],
                 past_key_value:Optional[Tuple[torch.Tensor,torch.Tensor]]=None,
                 use_cache=False,
                 attention_mask:Optional[torch.Tensor]=None 
@@ -205,7 +210,7 @@ class Attention(nn.Module):
         xk=xk.view(bsz,seq_len,self.num_key_value_heads,self.head_dim)
         xv=xv.view(bsz,seq_len,self.num_key_value_heads,self.head_dim)
     # q和k，使用roPE 旋转位置编码
-        cos,sin=position_embdding
+        cos,sin=position_embddings
         xq,xk=apply_rope_pos_emb(xq,xk,cos[:seq_len],sin[:seq_len])
     # 对于k和v，使用repeat(注意kv cache)
         if past_key_value is not None:
@@ -327,8 +332,8 @@ class MokioMindBlock(nn.Module):
 class MokioMindModel(nn.Module):
     def __init__(self, config:MokioMindConfig):
         super().__init__()
-        self.vocab_size,
-        self.num_hidden_layers=(
+        self.config = config
+        self.vocab_size, self.num_hidden_layers=(
             config.vocab_size,
             config.num_hidden_layers,
         )
@@ -421,7 +426,7 @@ class MokioMindForCausalLM(PreTrainedModel,GenerationMixin):
         # 让输出层的权重和嵌入曾的权重共享
         self.model.embed_tokens.weight = self.lm_head.weight
 
-        self.OUT = CausalLMOutputWithPast()
+
 
 
     def forward(
@@ -449,8 +454,8 @@ class MokioMindForCausalLM(PreTrainedModel,GenerationMixin):
         )
         logits =  self.lm_head(hidden_states[:,slice_indices,:])
 
-        self.OUT.__setitem__("last_hidden_states",hidden_states)
-        self.OUT.__setitem__("logits",logits)
-        self.OUT.__setitem__("past_key_values",past_key_values)
-
-        return self.OUT
+        return CausalLMOutputWithPast(
+            logits = logits,
+            past_key_values = past_key_values,
+            hidden_states= hidden_states 
+        )
