@@ -94,8 +94,8 @@ class RMSNorm(nn.Module):
     def _norm(self,x):
         return x * torch.rsqrt( x.pow(2).mean(-1,keepdim=True) + self.eps )
 #forward方法
-    def foward(self,x):
-        return self._norm(x.float()).type_as(x) * self.weight
+    def forward(self,x):
+        return self.weight * self._norm(x.float()).type_as(x)
 
 ########
 #RoPE部分
@@ -140,17 +140,16 @@ def apply_rope_pos_emb(q,k,cos,sin,unsqueeze_dim=1):
     # [a,b] -> [-b,a]  旋转
     def rotate_half(x):
         # x.shape[-1] 取最后一个维度的中点
-        #
-
+        
         # return[后半部分,前半部分]
         return torch.cat([ -x[...,x.shape[-1]//2:] , x[...,:x.shape[-1]//2] ],
                          dim=-1)
         # 应用旋转位置编码
         # x_rot = x * cos + rotate_half(x) * sin
         # unqueeze_dim 用于在指定维度上扩展cos和sin的维度，以便与q和k进行广播操作
-        q_embed = ( q * cos.unsqueeze(unsqueeze_dim) + rotate_half(q) * sin.unsqueeze(unsqueeze_dim) )
-        k_embed = ( k * cos.unsqueeze(unsqueeze_dim) + rotate_half(k) * sin.unsqueeze(unsqueeze_dim) )
-        return q_embed, k_embed
+    q_embed = ( q * cos.unsqueeze(unsqueeze_dim) + rotate_half(q) * sin.unsqueeze(unsqueeze_dim) )
+    k_embed = ( k * cos.unsqueeze(unsqueeze_dim) + rotate_half(k) * sin.unsqueeze(unsqueeze_dim) )
+    return q_embed, k_embed
 
 # 多个Q对于重复的kv
 def repeat_kv(x:torch.Tensor,n_rep:int) ->torch.Tensor:
@@ -187,8 +186,10 @@ class Attention(nn.Module):
                                 bias=False)
         self.v_proj = nn.Linear(args.hidden_size, self.num_key_value_heads * self.head_dim,
                                 bias=False)
-        self.o_proj = nn.Linear(self.num_key_value_heads * self.head_dim, args.hidden_size,
-                                bias=False) #反过来的
+        self.o_proj = nn.Linear(
+            args.num_attention_heads * self.head_dim, args.hidden_size, bias=False
+        )
+
         
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)   #残差网络
