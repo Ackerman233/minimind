@@ -73,7 +73,7 @@ class MokioMindConfig(PretrainedConfig):
 import torch
 import torch.nn as nn
 import math
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, List, Union
 from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers import PreTrainedModel, GenerationMixin
