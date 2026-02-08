@@ -7,6 +7,21 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "pandas",
+    "swanlab>=0.7.8",
     "torch",
     "transformers",
+    "torchvision",
+    "torchaudio",
 ]
+
+# 核心配置：定义一个专门找 GPU 包的仓库
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true  # 必须为 true，防止 markupsafe 等其他包也跑去这里找
+
+# 核心配置：明确指定这三个包必须从上面定义的仓库里拿
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
