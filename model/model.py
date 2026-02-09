@@ -215,9 +215,9 @@ class Attention(nn.Module):
         xq,xk=apply_rope_pos_emb(xq,xk,cos[:seq_len],sin[:seq_len])
 
         # 修改部分:加上transpose
-        xq = xq.transpose(1,2)  # [B,h,T,D]
-        xk = xk.transpose(1,2)  # [B,kv,T,D]
-        xv = xv.transpose(1,2)
+        # xq = xq.transpose(1,2)  # [B,h,T,D]
+        # xk = xk.transpose(1,2)  # [B,kv,T,D]
+        # xv = xv.transpose(1,2)
     # 对于k和v，使用repeat(注意kv cache)
         if past_key_value is not None:
             xk=torch.cat([past_key_value[0],xk],dim=1)
@@ -242,7 +242,7 @@ class Attention(nn.Module):
                 else attention_mask.view(bsz,1,1,-1).expand(bsz,self.n_local_heads,
                                                              seq_len,-1).bool()
             )
-            output = F.scaled_dot_product_attention(xq,xk,xv,attn_mask=attn_mask,
+            output = F.scaled_dot_product_attention(xq,xk,xv,attn_mask=None,
                                                     dropout_p=self.dropout if self.training else 0.0,
                                                     is_causal=True) #self.training就是训练 还是 推理模式
     # 核心部分：attn计算
@@ -322,8 +322,7 @@ class MokioMindBlock(nn.Module):
     def forward(self,hidden_states,position_embeddings,past_key_value=None,
                 use_cache=False,attention_mask=None):
         residual = hidden_states
-        hidden_states, 
-        present_key_value = self.self_attn(
+        hidden_states, present_key_value = self.self_attn(
             self.input_layernorm(hidden_states),
             position_embeddings,
             past_key_value,
