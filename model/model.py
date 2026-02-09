@@ -217,13 +217,15 @@ class Attention(nn.Module):
         if past_key_value is not None:
             xk=torch.cat([past_key_value[0],xk],dim=1)
             xv=torch.cat([past_key_value[1],xv],dim=1)
-        past_kv = (xk,xv)
+        past_kv = (xk,xv) if use_cache else None
 
-        xq,xk,xv = (
-            xq.transpose(1, 2), # [bsz, n_local_heads, seq_len, head_dim]
-            repeat_kv(xk, self.n_rep).transpose(1, 2),
-            repeat_kv(xv, self.n_rep).transpose(1, 2)
-        )
+        # 在进行 repeat_kv 之前进行 transpose，将 heads 移到第 2 维
+        xq = xq.transpose(1, 2) # [bsz, n_local_heads, seq_len, head_dim]
+
+        # 先对 xk, xv 进行 transpose，再进行 repeat_kv
+        # 或者在 repeat_kv 内部处理好维度
+        xk = repeat_kv(xk, self.n_rep).transpose(1, 2) # [bsz, n_local_heads, total_seq_len, head_dim]
+        xv = repeat_kv(xv, self.n_rep).transpose(1, 2) # [bsz, n_local_heads, total_seq_len, head_dim]
 
     # 进行attention计算，q@k^T/sqrt(d)
         if self.flash and seq_len>1 and (attention_mask is None 
