@@ -213,10 +213,16 @@ class Attention(nn.Module):
     # q和k，使用roPE 旋转位置编码
         cos,sin=position_embddings
         xq,xk=apply_rope_pos_emb(xq,xk,cos[:seq_len],sin[:seq_len])
+
+        # 修改部分:加上transpose
+        xq = xq.transpose(1,2)  # [B,h,T,D]
+        xk = xk.transpose(1,2)  # [B,kv,T,D]
+        xv = xv.transpose(1,2)
     # 对于k和v，使用repeat(注意kv cache)
         if past_key_value is not None:
             xk=torch.cat([past_key_value[0],xk],dim=1)
             xv=torch.cat([past_key_value[1],xv],dim=1)
+        
         past_kv = (xk,xv) if use_cache else None
 
         # 在进行 repeat_kv 之前进行 transpose，将 heads 移到第 2 维
