@@ -242,7 +242,7 @@ class Attention(nn.Module):
                 else attention_mask.view(bsz,1,1,-1).expand(bsz,self.n_local_heads,
                                                              seq_len,-1).bool()
             )
-            output = F.scaled_dot_product_attention(xq,xk,xv,attn_mask=None,
+            output = F.scaled_dot_product_attention(xq,xk,xv,attn_mask=attn_mask,
                                                     dropout_p=self.dropout if self.training else 0.0,
                                                     is_causal=True) #self.training就是训练 还是 推理模式
     # 核心部分：attn计算
