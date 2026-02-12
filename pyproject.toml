@@ -12,6 +12,7 @@ dependencies = [
     "transformers",
     "torchvision",
     "torchaudio",
+    "datasets>=4.5.0",
 ]
 
 # 核心配置：定义一个专门找 GPU 包的仓库
