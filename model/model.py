@@ -305,6 +305,103 @@ class FeedForward(nn.Module):
 
 
 ########
+# MoE层
+import torch.nn.init as init
+
+class MoEGate(nn.Module):
+    def __init__(self, config: MokioMindConfig):
+        # 初始化
+        super().__init__()
+        self.config = config
+        self.top_k = config.num_experts_per_tok
+        self.n_routed_experts = config.n_routed_experts
+
+        # 打分函数选择
+        self.scoring_func = config.scoring_func
+        
+        # alpha 用于控制辅助loss（aux）的权重，类比于学习率
+        self.alpha = config.aux_loss_alpha
+        # seq_aux决定使用 序列级别 还是 批次级别 的loss计算
+        self.seq_aux = config.seq_aux
+
+        self.norm_topk_prob = config.norm_topk_prob
+        self.gating_dim = config.hidden_size
+        # 权重，用于后续梯度下降更新
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim))
+        )
+        self.reset_parameters()
+
+    # kaiming初始化
+    # 初始化方法是可以方便的初始化一些合适的参数，更好地训练网络，避免梯度爆炸/消失之类的
+    def reset_parameters(self)->None:
+        init.kaiming_uniform_(self.weight,a=math.sqrt(5))
+
+    def forward(self,hidden_states):
+        # moe的时候只看token值，不关心位置，所以bsz和seq_len维度可以合并
+        bsz, seq_len, h = hidden_states.shape
+        hidden_states = hidden_states.view(-1,h)
+        # linear映射
+        logits = F.linear(hidden_states,self.weight,None)
+
+        # 对权重进行线性映射，计算出每个token对于各个expert的打分
+        if self.scoring_func == "softmax":
+            scores = logits.softmax(dim=-1)
+        else:
+            raise NotImplementedError(
+                f"insupportable scoring function for MoE gating: {self.scoring_func}"
+            )
+        
+        topk_weight, topk_idx = torch.topk(scores,k=self.top_k,dim=-1,sorted=False)
+        
+        # 第一步 权重归一化
+        # 权重归一化，让每个token对多个expert的权重和为1
+        if self.top_k > 1 and self.norm_topk_prob:
+            denominator = topk_weight.sum(dim=-1,keepdim=True)+1e-20
+            # 对每个token除以该token的权重总和
+            topk_weight = topk_weight / denominator
+
+        # 第二步 计算辅助损失
+        if self.training and self.alpha > 0.0:
+            scores_for_aux = scores
+            aux_topk = self.top_k
+            topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
+            # 方式1：序列级aux
+            # seq_aux 是bool参数
+            if self.seq_aux:
+                scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
+                ce = torch.zeros(
+                    bsz, self.n_routed_experts, device=hidden_states.device
+                )
+                # 计算每个专家的使用率（使用div）
+                ce.scatter_add_(
+                    1,
+                    topk_idx_for_aux_loss,
+                    torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device),
+                ).div_(seq_len * aux_topk / self.n_routed_experts)
+                # 计算辅助损失auxLoss
+                aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(
+                    dim=1
+                ).mean() * self.alpha
+            
+            # 方式2：批次级aux
+            else:
+                # 展平，转化为one-hot编码
+                mask_ce = F.one_hot(
+                    topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts
+                )
+                ce = mask_ce.float().mean(0)
+                Pi = scores_for_aux.mean(0)
+                fi = ce * self.n_routed_experts
+                # 计算辅助损失auxLoss
+                aux_loss = (Pi * fi).sum() * self.alpha
+        else:   # 假如不是训练模式 / alpha学习率参数=0
+            aux_loss = scores.new_zeros(1).squeeze()
+        
+        return topk_idx , topk_weight , aux_loss
+
+
+########
 # Block：拼接，把GQA和FFN层拼到一起    
 class MokioMindBlock(nn.Module):
     def __init__(self, layer_id:int,config:MokioMindConfig):
